@@ -10,6 +10,9 @@ using namespace cocos2d;
 
 namespace pathfinder {
 
+    // Forward declaration for object classification
+    void classifyObject(SimObjectData& obj);
+
     class PathfinderPanel : public CCNode {
     public:
         static PathfinderPanel* create(GJGameLevel* level);
@@ -21,7 +24,7 @@ namespace pathfinder {
 
         void update(float dt) override;
 
-        void cleanup();
+        void cleanup() override;
 
     private:
         void updateUI();
