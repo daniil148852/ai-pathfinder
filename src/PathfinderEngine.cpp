@@ -31,7 +31,7 @@ namespace pathfinder {
     void PathfinderEngine::start() {
         if (m_status == PathfinderStatus::Running) return;
 
-        cancel(); // Ensure previous thread is done
+        cancel();
 
         m_cancelFlag = false;
         m_status = PathfinderStatus::Running;
@@ -47,7 +47,9 @@ namespace pathfinder {
             m_thread->join();
         }
         m_thread.reset();
-        m_status = PathfinderStatus::Cancelled;
+        if (m_status == PathfinderStatus::Running) {
+            m_status = PathfinderStatus::Cancelled;
+        }
     }
 
     PathfinderStatus PathfinderEngine::getStatus() const {
@@ -89,7 +91,6 @@ namespace pathfinder {
 
     void PathfinderEngine::runPathfinder() {
         try {
-            // Primary: Beam search with look-ahead
             auto result = runBeamSearch();
 
             if (m_cancelFlag) {
@@ -123,24 +124,20 @@ namespace pathfinder {
     double PathfinderEngine::evaluateState(const PlayerState& state, int frame, bool justPressed) const {
         if (state.isDead) return -1000000.0;
 
-        double score = state.posX * 10.0; // Primary: maximize progress
+        double score = state.posX * 10.0;
 
-        // Prefer being near the center vertically (avoid extremes)
         double centerY = (Physics::GROUND_Y + Physics::CEILING_Y) * 0.5;
         double yDist = std::abs(state.posY - centerY);
         score -= yDist * 0.01;
 
-        // Penalty for high velocity (unstable states)
         score -= std::abs(state.velocityY) * 0.1;
 
-        // Bonus for being on ground in ground-based modes
         if (state.isOnGround &&
             (state.gameMode == GameMode::Cube || state.gameMode == GameMode::Ball ||
              state.gameMode == GameMode::Robot || state.gameMode == GameMode::Spider)) {
             score += 5.0;
         }
 
-        // Completion bonus
         if (state.percentComplete >= 100.0) {
             score += 1000000.0;
         }
@@ -150,14 +147,13 @@ namespace pathfinder {
 
     std::vector<FrameData> PathfinderEngine::runBeamSearch() {
         constexpr int BEAM_WIDTH = 32;
-        constexpr int DECISION_INTERVAL = 4; // Make decisions every N frames
+        constexpr int DECISION_INTERVAL = 4;
 
-        // Estimate total frames
         double xSpeedPerFrame = Physics::getSpeedMultiplier(m_startSpeed);
         int estimatedFrames = static_cast<int>(m_levelLength / xSpeedPerFrame) + 100;
-        estimatedFrames = std::min(estimatedFrames, 1000000); // Safety cap
+        estimatedFrames = std::min(estimatedFrames, 1000000);
 
-        // Initialize beam with starting state
+        // Initialize beam
         std::vector<BeamState> beam;
         {
             BeamState initial;
@@ -182,12 +178,12 @@ namespace pathfinder {
 
         while (frame < estimatedFrames && !m_cancelFlag) {
             std::vector<BeamState> candidates;
-            candidates.reserve(beam.size() * 2);
+            candidates.reserve(beam.size() * 4);
 
             for (auto& state : beam) {
                 if (state.playerState.isDead) continue;
                 if (state.playerState.posX >= m_levelLength) {
-                    // Found a solution
+                    // Found a solution — replay to collect frame data
                     PhysicsSimulator sim;
                     sim.setObjects(m_objects);
                     sim.setLevelLength(m_levelLength);
@@ -198,7 +194,6 @@ namespace pathfinder {
                     sim.setTPS(m_config.tps);
                     sim.reset();
 
-                    // Replay the inputs to get frame data
                     for (size_t i = 0; i < state.inputHistory.size(); i++) {
                         sim.step(state.inputHistory[i]);
                         if (sim.getState().isDead) break;
@@ -207,14 +202,13 @@ namespace pathfinder {
                     return sim.getFrameData();
                 }
 
-                // Try both: pressing and not pressing
+                // Try press and no-press
                 for (int action = 0; action < 2; action++) {
                     bool press = (action == 1);
 
                     BeamState candidate;
                     candidate.inputHistory = state.inputHistory;
 
-                    // Simulate DECISION_INTERVAL frames with this action
                     PhysicsSimulator sim;
                     sim.setObjects(m_objects);
                     sim.setLevelLength(m_levelLength);
@@ -225,7 +219,6 @@ namespace pathfinder {
                     sim.setTPS(m_config.tps);
                     sim.reset();
 
-                    // Fast-forward to current state by replaying history
                     auto& simState = sim.getState();
                     simState = state.playerState;
                     simState.currentFrame = static_cast<int>(state.inputHistory.size());
@@ -242,7 +235,7 @@ namespace pathfinder {
                     if (died) {
                         candidate.score = -1000000.0;
                     } else {
-                        // Look ahead to evaluate safety
+                        // Look-ahead safety check
                         PhysicsSimulator lookAheadSim;
                         lookAheadSim.setObjects(m_objects);
                         lookAheadSim.setLevelLength(m_levelLength);
@@ -259,7 +252,7 @@ namespace pathfinder {
                         bool safeAhead = true;
                         int laFrames = std::min(m_config.lookAheadFrames, 60);
                         for (int la = 0; la < laFrames; la++) {
-                            lookAheadSim.step(false); // Coast without input
+                            lookAheadSim.step(false);
                             if (lookAheadSim.getState().isDead) {
                                 safeAhead = false;
                                 break;
@@ -269,7 +262,7 @@ namespace pathfinder {
                         candidate.score = evaluateState(sim.getState(),
                             static_cast<int>(candidate.inputHistory.size()), press);
                         if (!safeAhead) {
-                            candidate.score -= 500.0; // Penalty for unsafe future
+                            candidate.score -= 500.0;
                         }
                     }
 
@@ -277,7 +270,7 @@ namespace pathfinder {
                     candidates.push_back(std::move(candidate));
                 }
 
-                // Also try: press then release pattern, and release then press
+                // Also try alternating patterns
                 if (DECISION_INTERVAL >= 2) {
                     for (int pattern = 0; pattern < 2; pattern++) {
                         BeamState candidate;
@@ -320,7 +313,7 @@ namespace pathfinder {
                 }
             }
 
-            // Sort by score descending and keep top BEAM_WIDTH
+            // Sort by score descending, keep top BEAM_WIDTH
             std::sort(candidates.begin(), candidates.end(),
                 [](const BeamState& a, const BeamState& b) {
                     return a.score > b.score;
@@ -329,13 +322,12 @@ namespace pathfinder {
             beam.clear();
             int kept = 0;
             for (auto& c : candidates) {
-                if (c.playerState.isDead && kept > 0) continue; // Skip dead unless beam is empty
+                if (c.playerState.isDead && kept > 0) continue;
                 beam.push_back(std::move(c));
                 kept++;
                 if (kept >= BEAM_WIDTH) break;
             }
 
-            // If beam is empty, all paths died
             if (beam.empty()) {
                 return {};
             }
@@ -357,11 +349,10 @@ namespace pathfinder {
             // Stale detection
             if (bestProgress <= bestProgressSoFar + 0.01) {
                 staleFrames += DECISION_INTERVAL;
-                if (staleFrames > m_config.tps * 5) { // 5 seconds of no progress
-                    // Try random exploration
+                if (staleFrames > m_config.tps * 5) {
                     for (auto& s : beam) {
                         if (m_rng() % 3 == 0) {
-                            int randFrames = m_rng() % 20 + 5;
+                            int randFrames = static_cast<int>(m_rng() % 20) + 5;
                             PhysicsSimulator sim;
                             sim.setObjects(m_objects);
                             sim.setLevelLength(m_levelLength);
@@ -387,8 +378,8 @@ namespace pathfinder {
                         }
                     }
                 }
-                if (staleFrames > m_config.tps * 30) { // 30 seconds
-                    return {}; // Give up
+                if (staleFrames > m_config.tps * 30) {
+                    return {};
                 }
             } else {
                 bestProgressSoFar = bestProgress;
@@ -396,7 +387,7 @@ namespace pathfinder {
             }
         }
 
-        // If we got here, check if best beam state reached end
+        // Check if any beam state reached the end
         for (auto& s : beam) {
             if (s.playerState.posX >= m_levelLength) {
                 PhysicsSimulator sim;
@@ -420,7 +411,6 @@ namespace pathfinder {
         return {};
     }
 
-    // Genetic algorithm methods (used as fallback or alternative)
     double PathfinderEngine::evaluateGenome(const Genome& genome) {
         PhysicsSimulator sim;
         sim.setObjects(m_objects);
@@ -437,14 +427,14 @@ namespace pathfinder {
         }
 
         const auto& state = sim.getState();
-        double fitness = state.posX; // Base: distance traveled
+        double fitness = state.posX;
 
         if (state.isDead) {
-            fitness *= 0.5; // Penalty for dying
+            fitness *= 0.5;
         }
 
         if (sim.hasReachedEnd()) {
-            fitness += m_levelLength * 10.0; // Huge bonus for completing
+            fitness += m_levelLength * 10.0;
         }
 
         return fitness;
@@ -453,9 +443,8 @@ namespace pathfinder {
     PathfinderEngine::Genome PathfinderEngine::crossover(const Genome& a, const Genome& b) {
         Genome child;
         size_t len = std::max(a.inputs.size(), b.inputs.size());
-        child.inputs.resize(len);
+        child.inputs.resize(len, false);
 
-        // Two-point crossover
         std::uniform_int_distribution<size_t> dist(0, len > 0 ? len - 1 : 0);
         size_t p1 = dist(m_rng);
         size_t p2 = dist(m_rng);
@@ -475,13 +464,15 @@ namespace pathfinder {
 
     void PathfinderEngine::mutate(Genome& genome) {
         std::uniform_real_distribution<double> prob(0.0, 1.0);
-        for (auto& input : genome.inputs) {
+
+        // Use index-based iteration for vector<bool> (proxy reference issue)
+        for (size_t i = 0; i < genome.inputs.size(); i++) {
             if (prob(m_rng) < m_config.mutationRate) {
-                input = !input;
+                genome.inputs[i] = !genome.inputs[i];
             }
         }
 
-        // Occasionally insert or remove a sequence of presses
+        // Occasionally set a sequence of presses
         if (prob(m_rng) < 0.1 && genome.inputs.size() > 10) {
             std::uniform_int_distribution<size_t> posDist(0, genome.inputs.size() - 1);
             size_t start = posDist(m_rng);
@@ -511,7 +502,6 @@ namespace pathfinder {
         int maxFrames = static_cast<int>(m_levelLength / xSpeedPerFrame) + 1000;
 
         for (int i = 0; i < maxFrames && !sim.getState().isDead && !sim.hasReachedEnd(); i++) {
-            // Simple greedy: try pressing, if it leads to death within lookAhead, don't press
             PhysicsSimulator pressSim;
             pressSim.setObjects(m_objects);
             pressSim.setLevelLength(m_levelLength);
