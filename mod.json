@@ -1,0 +1,39 @@
+{
+    "geode": "4.10.2",
+    "gd": {
+        "android": "2.2074"
+    },
+    "id": "serpentdev.ai-pathfinder",
+    "name": "AI Pathfinder & Replay Export",
+    "version": "v1.0.0",
+    "developer": "SerpentDev",
+    "description": "Asynchronous AI pathfinder that simulates GD 2.2 physics at 240 TPS and exports replays to .gdr2 format compatible with Eclipse Menu.",
+    "dependencies": [],
+    "tags": ["gameplay", "utility", "replay"],
+    "settings": {
+        "tps": {
+            "name": "Simulation TPS",
+            "description": "Ticks per second for physics simulation",
+            "type": "int",
+            "default": 240,
+            "min": 60,
+            "max": 480
+        },
+        "max-attempts": {
+            "name": "Max Pathfinding Attempts",
+            "description": "Maximum simulation attempts before giving up",
+            "type": "int",
+            "default": 50000,
+            "min": 1000,
+            "max": 500000
+        },
+        "look-ahead-frames": {
+            "name": "Look-Ahead Frames",
+            "description": "How many frames ahead to evaluate safety",
+            "type": "int",
+            "default": 120,
+            "min": 30,
+            "max": 480
+        }
+    }
+}
